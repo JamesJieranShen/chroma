@@ -874,7 +874,7 @@ class EventViewer(Camera):
                 scintillation = scintillation[selector]
                 reemission = reemission[selector]
             nphotons = len(tracks)
-            prob = self.photons_max/nphotons if self.photons_max is not None and nphotons is not 0 else 1.0
+            prob = self.photons_max/nphotons if self.photons_max is not None and nphotons != 0 else 1.0
             selector = np.random.random(len(tracks)) < prob
             nphotons = np.count_nonzero(selector)
             for i,track in ((i,t) for i,(s,t) in enumerate(zip(selector,tracks)) if s):
@@ -930,7 +930,7 @@ class EventViewer(Camera):
                     scintillation = scintillation[selector]
                     reemission = reemission[selector]
                 nphotons = len(tracks)
-                prob = self.photons_max/nphotons if self.photons_max is not None and nphotons is not 0 else 1.0
+                prob = self.photons_max/nphotons if self.photons_max is not None and nphotons != 0 else 1.0
                 selector = np.random.random(len(tracks)) < prob
                 nphotons = np.count_nonzero(selector)
                 for i,track in ((i,t) for i,(s,t) in enumerate(zip(selector,tracks)) if s):
