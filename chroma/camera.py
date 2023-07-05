@@ -648,11 +648,9 @@ class Camera(multiprocessing.Process):
         self.window = pygame.display.set_mode(self.size)
         self.screen = pygame.Surface(self.size, pygame.SRCALPHA)
         pygame.display.set_caption('')
-        
         self.init_gpu()
         #makes things significantly faster somehow
         self.rotate(0.001,[1/np.sqrt(2),0,1/np.sqrt(2)])
-        
         if self.spnav:
             try:
                 wm_info = pygame.display.get_wm_info()
@@ -662,9 +660,7 @@ class Camera(multiprocessing.Process):
                 #print 'Space Navigator support enabled.'
             except:
                 self.spnav = False
-
         self.update()
-
         self.done = False
         self.clicked = False
 
@@ -878,7 +874,7 @@ class EventViewer(Camera):
                 scintillation = scintillation[selector]
                 reemission = reemission[selector]
             nphotons = len(tracks)
-            prob = self.photons_max/nphotons if self.photons_max is not None else 1.0
+            prob = self.photons_max/nphotons if self.photons_max is not None and nphotons is not 0 else 1.0
             selector = np.random.random(len(tracks)) < prob
             nphotons = np.count_nonzero(selector)
             for i,track in ((i,t) for i,(s,t) in enumerate(zip(selector,tracks)) if s):
@@ -897,7 +893,63 @@ class EventViewer(Camera):
                 geometry = create_geometry_from_obj(geometry)
                 gpu_geometry = gpu.GPUGeometry(geometry)
                 self.gpu_geometries.append(gpu_geometry)
-            
+    
+    def render_mc_info_all_events(self):
+        #function added to visualize all events in a root file at the same time
+        self.gpu_geometries = [self.gpu_geometry]
+        for i, ev in enumerate(self.rr):
+            print('Evaluating event %i' %i)
+            if self.sum_mode or ev is None:
+                return
+ 
+            if self.track_display_mode in ['chroma', 'both'] and ev.photon_tracks is not None:
+                geometry = Geometry()
+                print('Total Photons',len(ev.photon_tracks))
+                
+                def has(flags,test):
+                    return flags & test == test
+                
+                tracks = ev.photon_tracks
+                if self.photons_detected_only:
+                    detected = np.asarray([has(track.flags[-1],event.SURFACE_DETECT) for track in tracks])
+                    tracks = [t for t,m in zip(tracks,detected) if m]
+                cherenkov = np.asarray([has(track.flags[0],event.CHERENKOV) and not has(track.flags[-1],event.BULK_REEMIT) for track in tracks])
+                scintillation = np.asarray([has(track.flags[0],event.SCINTILLATION) and not has(track.flags[-1],event.BULK_REEMIT) for track in tracks])
+                reemission = np.asarray([has(track.flags[-1],event.BULK_REEMIT) for track in tracks])
+                if self.photons_only_type is not None:
+                    if self.photons_only_type == 'cher':
+                        selector = cherenkov
+                    elif self.photons_only_type == 'scint':
+                        selector = scintillation
+                    elif self.photons_only_type == 'reemit':
+                        selector = reemission
+                    else:
+                        raise Exception('Unknown only type: %s'%only)
+                    tracks = [t for t,m in zip(tracks,selector) if m]
+                    cherenkov = cherenkov[selector]
+                    scintillation = scintillation[selector]
+                    reemission = reemission[selector]
+                nphotons = len(tracks)
+                prob = self.photons_max/nphotons if self.photons_max is not None and nphotons is not 0 else 1.0
+                selector = np.random.random(len(tracks)) < prob
+                nphotons = np.count_nonzero(selector)
+                for i,track in ((i,t) for i,(s,t) in enumerate(zip(selector,tracks)) if s):
+                    if cherenkov[i]:
+                        color = [255,0,0]
+                    elif scintillation[i]:
+                        color = [0,0,255]
+                    elif reemission[i]:
+                        color = [0,255,0]
+                    else:
+                        color = [255,255,255]
+                    steps = min(len(track),self.photons_max_steps) if self.photons_max_steps is not None else len(track)
+                    self.render_photon_track(geometry,track[:steps],sz=self.photons_track_size,color=color)
+                if nphotons > 0:
+                    print('Rendered Photons',nphotons)
+                    geometry = create_geometry_from_obj(geometry)
+                    gpu_geometry = gpu.GPUGeometry(geometry)
+                    self.gpu_geometries.append(gpu_geometry)
+                
 
     def sum_events(self):
         print('Summing events in file...')
@@ -1027,6 +1079,10 @@ class EventViewer(Camera):
                     return
                 self.color_hit_pmts()
                 self.render_mc_info()
+                self.update()
+                return
+            elif event.key == K_o:
+                self.render_mc_info_all_events()
                 self.update()
                 return
 

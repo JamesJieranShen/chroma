@@ -4,9 +4,10 @@ from collections import deque
 
 from chroma.gdml import gen_mesh
 from chroma.log import logger
+from copy import deepcopy
 
 ## Utility functions to connect the loader to gen_mesh
-_units = { 'cm':1, 'mm':0.1, 'm':100, 'deg':np.pi/180, 'rad':1 }
+_units = { 'cm':10, 'mm':1, 'm':1000, 'deg':np.pi/180, 'rad':1 }
 
 def get_vals(elem, value_attr=['x', 'y', 'z'], default_vals=None, unit_attr='unit'):
     '''
@@ -33,7 +34,7 @@ def get_zplanes(elem, tag='zplane', unit_attr='lunit'):
     '''Return the children elements with the `tag` as an attribute dictionary '''
     scale = _units[elem.get(unit_attr)] if unit_attr is not None else 1.0
     planes = elem.findall(tag)
-    result = [plane.attrib for plane in planes]
+    result = deepcopy([plane.attrib for plane in planes])
     for r in result:
         r.update((x, float(y)*scale) for x, y in r.items())
         if 'rmin' not in r:

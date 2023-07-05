@@ -10,7 +10,7 @@ try:
     from chroma import gpu
     from chroma.sim import Simulation
 except ImportError:
-    print("CHROMA IS STARTING WITHOUT A GPU!!")
+    print("WARNING: GPU context init failed. Chroma cannot perform simulations!")
 from chroma import itertoolset
 #from chroma import likelihood
 #from chroma.likelihood import Likelihood

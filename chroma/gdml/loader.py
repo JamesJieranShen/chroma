@@ -1,33 +1,42 @@
 import xml.etree.ElementTree as et
 import numpy as np
 from collections import deque
-import functools
 
 from chroma.detector import Detector
 from chroma.transform import make_rotation_matrix
 from chroma.geometry import Mesh, Solid
 from chroma.log import logger
-
+from copy import deepcopy
 
 #Using the PyMesh library instead of Chroma's internal meshes to support boolean
 #operations like subtractions or unions. Perhaps Chroma's meshes should be
 #replaced _entirely_ by PyMesh...
-import pymesh
 from chroma.gdml import loader_helper as helper
 from chroma.gdml import gen_mesh
+import gmsh
 
-def box(x,y,z):
-    '''Generate a mesh for a GDML box primitive'''
-    return pymesh.generate_box_mesh([-x/2,-y/2,-z/2],[x/2,y/2,z/2])
-
-def tube(z,r,segs=None):
-    '''Generate a mesh for a GDML tube primitive. Note: does not support all parameters.'''
-    if segs is None:
-        segs = max(9,int(r*16))
-    return pymesh.generate_cylinder([0,0,-z/2],[0,0,+z/2],r,r,num_segments=segs)
     
+def generate_mesh_from_obj():
+    elementTags, nodeTags = gmsh.model.mesh.getElementsByType(2)
+    faces = np.asarray(nodeTags)
+    faces = np.reshape(faces, (-1, 3))
+    node_unique = list(set(nodeTags))
+    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+    coords = np.asarray(coords)
+    coords = np.reshape(coords, (-1, 3))
+
+    coord_dict = {}
+    for nodeTag, coord in zip(nodeTags, coords):
+        coord_dict[nodeTag] = coord
+
+    verts = np.zeros((int(np.max(node_unique)+1), 3))
+    for node in node_unique:
+        verts[node] = coord_dict.get(node)
+    return verts, faces
+
+
 #To convert length and angle units to cm and radians
-units = { 'cm':1, 'mm':0.1, 'm':100, 'deg':np.pi/180, 'rad':1 }
+units = { 'cm':10, 'mm':1, 'm':1000, 'deg':np.pi/180, 'rad':1 }
 
 class Volume:
     '''
@@ -76,10 +85,12 @@ class GDMLLoader:
     if the GDML uses unsupported features.
     '''
     
-    def __init__(self, gdml_file):
+    def __init__(self, gdml_file, refinement_order=0):
         ''' 
         Read a geometry from the specified GDML file.
         '''
+        self.refinement_order = refinement_order
+        
         self.gdml_file = gdml_file
         xml = et.parse(gdml_file)
         gdml = xml.getroot()
@@ -97,9 +108,14 @@ class GDMLLoader:
         
         world_ref = gdml.find('setup').find('world').get('ref')
         self.world = Volume(world_ref, self)
-        self.get_mesh = functools.lru_cache(maxsize=4096)(self._get_mesh)
-        self.n_consecutive_op = functools.lru_cache(maxsize=512)(self._n_consecutive_op)
-        self.solid_generated = set()
+        self.mesh_cache = {}
+
+        ## Initialize gmsh
+        gmsh.initialize()
+        gmsh.option.setNumber('Mesh.MeshSizeFromCurvature', 32) # number of meshes per 2*pi radian
+        gmsh.option.setNumber('Mesh.MinimumCircleNodes', 32) # number of nodes per circle
+        gmsh.model.add(self.gdml_file)
+
         
     def get_pos_rot(self, elem, refs=('position', 'rotation')):
         ''' 
@@ -139,110 +155,21 @@ class GDMLLoader:
         txt = elem.get(attr, default=None)
         assert txt is not None or default is not None, 'Missing attribute: '+attr
         return eval(txt, {}, {}) if txt is not None else default
-
-    def _n_consecutive_op(self, solid_ref, op):
-        '''
-        Find the number of consecutive op done on the same object. This shows up in GDML files as a long list
-        of op where the first element is a previous subtraction. These long lists can be optimized to reduce
-        the number of boolean operation done on the same object, hence improving performance.
-        FIXME: Is requring that the RHS is not op necessary?
-        '''
-        elem = self.solid_map[solid_ref]
-        if elem.tag!=op: return 0
-        if elem.find('firstrotation')!=None or elem.find('firstposition')!=None:
-            return 0
-        c1 = elem.find('first').attrib['ref']
-        c2 = elem.find('second').attrib['ref']
-        if self.n_consecutive_op(c2, op) == 0:
-            return self.n_consecutive_op(c1, op)+1
-        else: return 0
-
-    def consecutive_subtraction(self, solid_ref):
-        '''
-        Special Optimization for consecutive subtractions done on the same solid. In terms of a boolean operation tree,
-        it is a tree of subtractio operations who is perfectly impalanced (all right child nodes are leaves). This is
-        effectively:
-            O = S - c1 - c2 - c3 - c4 ...
-        Where S is the first solid left leave, c_n are the cuts, and O is the final output mesh.
-        This method poerforms an optimization as the following:
-            O = (S-c1) - (c2+c3) - (c4+c5) - (c6+c7)...
-              = [(S-c1) - (c2+c3)] - [(c4+c5) + (c6+c7)]
-              = ...
-        Which replaces N consecutive subtraction on the same object with log_2(N) operations on the same object,
-        therefore improves precision.
-        '''
-        # Get all leaves
-        solids = deque()
-        curr = self.solid_map[solid_ref]
-        while self.n_consecutive_op(curr.attrib['name'], 'subtraction')!=0:
-            c1 = curr.find('first')
-            c2 = curr.find('second')
-            assert c2.tag != 'subtraction', 'not a pure subtraction list'
-            pos, rot = self.get_pos_rot(curr)
-            pos_val = None
-            rot_val = None
-            if pos is not None:
-                pos_val = helper.get_vals(pos)
-            if rot is not None:
-                rot_val = helper.get_vals(rot)
-            logger.debug(f" Generating primary shape #{len(solids)}: {c2.attrib['ref']}")
-            solid = self.get_mesh(c2.attrib['ref'])
-            solid = gen_mesh.transform(solid, pos_val, rot_val)
-            solids.appendleft(solid)
-            curr = self.solid_map[c1.attrib['ref']]
-        logger.debug(f" Generating primary shape #{len(solids)}: {curr.attrib['name']}")
-        solids.appendleft(self.get_mesh(curr.attrib['name']))
-        logger.debug("All Primaries generated, balanced subtraction begins")
-        if len(solids) > 2**6:
-            return helper.balanced_consecutive_subtraction(solids)
-        return helper.subtraction_via_balanced_union(solids)
-
-    def consecutive_union(self, solid_ref):
-        # Get all leaves
-        solids = deque()
-        curr = self.solid_map[solid_ref]
-        while self.n_consecutive_op(curr.attrib['name'], 'union')!=0:
-            c1 = curr.find('first')
-            c2 = curr.find('second')
-            assert c2.tag != 'union', 'not a pure union list'
-            pos, rot = self.get_pos_rot(curr)
-            pos_val = None
-            rot_val = None
-            if pos is not None:
-                pos_val = helper.get_vals(pos)
-            if rot is not None:
-                rot_val = helper.get_vals(rot)
-            logger.debug(f" Generating primary shape #{len(solids)}: {c2.attrib['ref']}")
-            solid = self.get_mesh(c2.attrib['ref'])
-            solid = gen_mesh.transform(solid, pos_val, rot_val)
-            solids.appendleft(solid)
-            curr = self.solid_map[c1.attrib['ref']]
-        logger.debug(f" Generating primary shape #{len(solids)}: {curr.attrib['name']}")
-        solids.appendleft(self.get_mesh(curr.attrib['name']))
-        logger.debug("All Primaries generated, balanced union begins")
-        return helper.balanced_consecutive_union(solids)
         
-        
-    def _get_mesh(self,solid_ref):
+    def get_mesh(self,solid_ref):
         '''
         Build a PyMesh mesh for the solid identified by solid_ref if the named
         solid has not been built. If it has been built, a cached mesh is returned.
         If the tag of the solid is not yet implemented, or it uses features not
         yet implemented, this will raise an exception.
         '''
-        # if solid_ref in self.mesh_cache:
-        #     return self.mesh_cache[solid_ref]
+        if self.solidsToIgnore(solid_ref):
+            logger.info(f"Ignoring solid: {solid_ref}")
+            return None
+        logger.info(f"Generating Solid {solid_ref}")
         elem = self.solid_map[solid_ref]
         mesh_type = elem.tag
-        logger.debug(f"{str(len(self.solid_generated))+'/'+str(len(self.solid_map)):<12} {mesh_type:<15} {solid_ref:<100}")
-        # print(self.get_mesh.cache_info())
-        if self.n_consecutive_op(solid_ref, op='subtraction') > 8: # special optimization for long chain of subtraction
-            logger.debug(f"Found subtraction chain of length {self.n_consecutive_op(solid_ref, op='subtraction')}, optimizing")
-            mesh = self.consecutive_subtraction(solid_ref)
-        elif self.n_consecutive_op(solid_ref, op='union') > 8:
-            logger.debug(f"Found union chain of length {self.n_consecutive_op(solid_ref, op='union')}, optimizing")
-            mesh = self.consecutive_union(solid_ref)
-        elif mesh_type in ('union', 'subtraction', 'intersection'): # default boolean operations
+        if mesh_type in ('union', 'subtraction', 'intersection'):
             a = self.get_mesh(elem.find('first').get('ref'))
             b = self.get_mesh(elem.find('second').get('ref'))
             fpos, frot = self.get_pos_rot(elem, refs=('firstposition', 'firstrotation'))
@@ -252,27 +179,25 @@ class GDMLLoader:
             for i, entry in enumerate(posrot_entries):
                 if entry is not None:
                     posrot_vals[i] = helper.get_vals(entry)
-            logger.debug(f"Performing {mesh_type} for {solid_ref}")
-            mesh = gen_mesh.gdml_boolean(a, b, mesh_type, firstpos=posrot_vals[0], firstrot=posrot_vals[1], 
-            pos=posrot_vals[2], rot=posrot_vals[3])
-        else: # primaries
-            dispatcher = {
-                'box':              helper.box,
-                'eltube':           helper.eltube,
-                'orb':              helper.orb,
-                'polycone':         helper.polycone,
-                'polyhedra':        helper.polyhedra,
-                'sphere':           helper.sphere,
-                'torus':            helper.torus,
-                'tube':             helper.tube,
-                'opticalsurface':   helper.ignore,
-            }
-            generator = dispatcher.get(mesh_type, helper.notImplemented)
-            mesh = generator(elem)
-        self.solid_generated.add(solid_ref)
+            noUnion = self.noUnionClassifier(solid_ref)
+            mesh = gen_mesh.gdml_boolean(a, b, mesh_type, firstpos=posrot_vals[0], firstrot=posrot_vals[1], pos=posrot_vals[2], rot=posrot_vals[3], noUnion=noUnion)
+            return mesh
+        dispatcher = {
+            'box':              helper.box,
+            'eltube':           helper.eltube,
+            'orb':              helper.orb,
+            'polycone':         helper.polycone,
+            'polyhedra':        helper.polyhedra,
+            'sphere':           helper.sphere,
+            'torus':            helper.torus,
+            'tube':             helper.tube,
+            'opticalsurface':   helper.ignore,
+        }
+        generator = dispatcher.get(mesh_type, helper.notImplemented)
+        mesh = generator(elem)
         return mesh
         
-    def build_detector(self, detector=None, volume_classifier=_default_volume_classifier):
+    def build_detector(self, detector=None, volume_classifier=_default_volume_classifier, solidsToIgnore=None, noUnion=None):
         '''
         Add the meshes defined by this GDML to the detector. If detector is not
         specified, a new detector will be created.
@@ -288,6 +213,15 @@ class GDMLLoader:
         '''
         if detector is None:
             detector = Detector(vacuum)
+        if solidsToIgnore is None: # by default ignore nothing
+            self.solidsToIgnore = lambda _: False
+        else:
+            self.solidsToIgnore=solidsToIgnore
+
+        if noUnion is None:
+            self.noUnionClassifier = lambda _: False
+        else:
+            self.noUnionClassifier = noUnion
         q = deque()
         q.append([self.world, np.zeros(3), np.identity(3), None])
         while len(q):
@@ -295,18 +229,29 @@ class GDMLLoader:
             for child, c_pos, c_rot in zip(v.children, v.child_pos, v.child_rot):
                 c_pos = self.get_vals(c_pos) if c_pos is not None else np.zeros(3)
                 c_rot = self.get_vals(c_rot) if c_rot is not None else np.identity(3)
-                c_pos = np.matmul(c_pos,rot)+pos
+                c_pos = (rot @ c_pos) + pos
                 x_rot = make_rotation_matrix(c_rot[0], [1, 0, 0])
                 y_rot = make_rotation_matrix(c_rot[1], [0, 1, 0])
                 z_rot = make_rotation_matrix(c_rot[2], [0, 0, 1])
-                c_rot = np.matmul(rot, np.matmul(x_rot, np.matmul(y_rot, z_rot))) #FIXME verify this order
+                c_rot = (rot @ x_rot @ y_rot @ z_rot) #FIXME verify this order
                 q.append([child, c_pos, c_rot, v.material_ref])
             classification, kwargs = volume_classifier(v.name, v.material_ref, parent_material_ref)
             if classification == 'omit':
-                logger.debug(f"{v.solid_ref} is ommited.")
+                logger.debug(f"Volume {v.name} is omitted.")
                 continue
-            logger.info(f"Generating mesh for {v.solid_ref}.")
-            mesh = self.get_mesh(v.solid_ref)
+            if v.solid_ref in self.mesh_cache:
+                logger.info(f"Using cache of solid {v.solid_ref} for volume {v.name}")
+                mesh = deepcopy(self.mesh_cache[v.solid_ref])
+            else:
+                gmsh.clear()
+                obj = self.get_mesh(v.solid_ref)
+                gmsh.model.occ.synchronize()
+                gmsh.model.mesh.generate(2)
+                for _ in range(self.refinement_order):
+                    gmsh.model.mesh.refine()
+                verts, faces = generate_mesh_from_obj()
+                mesh = Mesh(verts, faces)
+                self.mesh_cache[v.solid_ref] = deepcopy(mesh)
             if mesh is None:
                 continue
             if classification == 'pmt':
@@ -318,5 +263,4 @@ class GDMLLoader:
                 detector.add_solid(solid, displacement=pos, rotation=rot)   
             else:
                 raise Exception('Unknown volume classification: '+classification)
-        logger.info("Detector geometry generation complete.")
         return detector
