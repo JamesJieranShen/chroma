@@ -32,7 +32,8 @@ RUN apt update && apt upgrade -y && apt install -y wget git cmake python3 python
     libxerces-c-dev \
     libxmu-dev  \
     libxi-dev  \
-    freeglut3-dev
+    freeglut3-dev \
+    python3-venv
 RUN pip install numpy
 WORKDIR /opt/
 
@@ -41,4 +42,5 @@ COPY --from=g4-build /opt/geant4 /opt/geant4
 COPY --from=root-build /opt/root /opt/root
 COPY --from=root-build /etc/profile.d/* /etc/profile.d/
 COPY --from=g4-build /etc/profile.d/* /etc/profile.d/
+COPY 50-chroma_startup.sh /etc/profile.d/
 CMD ["/bin/bash","-l"]

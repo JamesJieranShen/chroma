@@ -1,0 +1,1 @@
+export PS1="\[\e[35m\]chroma-docker\[\e[m\]:\[\e[32m\]\w\[\e[m\]\\$ "

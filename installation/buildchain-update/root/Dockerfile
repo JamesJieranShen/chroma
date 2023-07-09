@@ -10,7 +10,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-l", "-c"]
 RUN apt update && apt upgrade -y
 RUN apt update && apt install -y wget git cmake python3 python-is-python3 python3-dev python3-pip
-RUN apt update && apt install  -y \
+RUN RUN apt update && apt upgrade -y && apt install -y wget git cmake python3 python-is-python3 python3-dev python3-pip \
     dpkg-dev \
     cmake \
     g++ \
@@ -30,7 +30,8 @@ RUN apt update && apt install  -y \
     libxerces-c-dev \
     libxmu-dev  \
     libxi-dev  \
-    freeglut3-dev
+    freeglut3-dev \
+    python3-venv
 RUN pip install numpy
 
 WORKDIR /opt/
