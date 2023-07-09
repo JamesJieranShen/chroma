@@ -1,0 +1,32 @@
+diff --git a/environments/g4py/source/materials/CMakeLists.txt b/environments/g4py/source/materials/CMakeLists.txt
+index 662e460..fb99741 100644
+--- a/environments/g4py/source/materials/CMakeLists.txt
++++ b/environments/g4py/source/materials/CMakeLists.txt
+@@ -8,6 +8,7 @@ geant4_add_pymodule(pyG4materials
+   pyG4ElementVector.cc
+   pyG4Isotope.cc
+   pyG4Material.cc
++  pyG4MaterialPropertiesTable.cc
+   pyG4MaterialTable.cc
+   pyG4NistManager.cc
+   pymodG4materials.cc
+diff --git a/environments/g4py/source/materials/pymodG4materials.cc b/environments/g4py/source/materials/pymodG4materials.cc
+index 391378a..a845312 100644
+--- a/environments/g4py/source/materials/pymodG4materials.cc
++++ b/environments/g4py/source/materials/pymodG4materials.cc
+@@ -37,6 +37,7 @@ using namespace boost::python;
+ // ====================================================================
+ void export_G4Material();
+ void export_G4MaterialTable();
++void export_G4MaterialPropertiesTable();
+ void export_G4Element();
+ void export_G4ElementTable();
+ //void export_G4ElementVector();
+@@ -48,6 +49,7 @@ BOOST_PYTHON_MODULE(G4materials)
+ {
+   export_G4Material();
+   export_G4MaterialTable();
++  export_G4MaterialPropertiesTable();
+   export_G4Element();
+   export_G4ElementTable();
+   //export_G4ElementVector();
