@@ -117,25 +117,24 @@ class Solid(object):
     in a Mesh object."""
     def __init__(self, mesh, material1=None, material2=None, surface=None, color=0x33ffffff):
         self.mesh = mesh
-
         if np.iterable(material1):
             if len(material1) != len(mesh.triangles):
                 raise ValueError('shape mismatch')
-            self.material1 = np.array(material1, dtype=np.object)
+            self.material1 = np.array(material1, dtype=object)
         else:
             self.material1 = np.tile(material1, len(self.mesh.triangles))
 
         if np.iterable(material2):
             if len(material2) != len(mesh.triangles):
                 raise ValueError('shape mismatch')
-            self.material2 = np.array(material2, dtype=np.object)
+            self.material2 = np.array(material2, dtype=object)
         else:
             self.material2 = np.tile(material2, len(self.mesh.triangles))
 
         if np.iterable(surface):
             if len(surface) != len(mesh.triangles):
                 raise ValueError('shape mismatch')
-            self.surface = np.array(surface, dtype=np.object)
+            self.surface = np.array(surface, dtype=object)
         else:
             self.surface = np.tile(surface, len(self.mesh.triangles))
 
